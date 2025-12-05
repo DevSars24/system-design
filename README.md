@@ -1,6 +1,4 @@
-Here is the **complete System Design roadmap rewritten entirely in clean, professional English** — theory + practice + interview preparation.
 
----
 
 # 🚀 **COMPLETE SYSTEM DESIGN ROADMAP (A → Z)**
 
