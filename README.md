@@ -307,7 +307,7 @@ Producer ──▶ [Kafka Topic]
                └── Partition 2 ──▶ Consumer Group A (Consumer 3)
 ```
 
-> 🧠 **Practice**: Design an email notification system — order placed → Kafka → email service.
+> 🧠 **Practice**: Design an email notification system — order placed → Kafka → email service. (See detailed design in [HLD_LEC_7_Notification_System.md](file:///c:/Users/saura/system-design/HLD_LEC_7_Notification_System.md)).
 
 ---
 
@@ -888,7 +888,7 @@ Two identical environments (Blue = live, Green = new). Switch traffic instantly 
 |---|---------|----------------|
 | 1 | **URL Shortener** | Hash function, KV store, redirect |
 | 2 | **Rate Limiter** | Token bucket / Redis counter |
-| 3 | **Notification System** | Kafka, push/email/SMS service |
+| 3 | [**Notification System**](file:///c:/Users/saura/system-design/HLD_LEC_7_Notification_System.md) | Kafka, push/email/SMS service |
 | 4 | **Chat System** | WebSockets, message queue |
 | 5 | **News Feed** | Fan-out, caching, timeline |
 
