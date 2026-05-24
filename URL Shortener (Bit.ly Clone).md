@@ -22,9 +22,12 @@
 
 Design a **URL Shortener** service like **[Bit.ly](https://bit.ly)**.
 
-```
-Long URL  ──►  [Service]  ──►  Short URL
-Short URL ──►  [Browser]  ──►  Redirected to Long URL
+```mermaid
+flowchart LR
+    A["Long URL\nwww.example.com/api/v1/userId=1&userName=Aditya"] -->|POST| SVC[URL Shortener Service]
+    SVC -->|returns| B["Short URL\nwww.bit.ly/aQw12"]
+    B -->|GET - browser| SVC
+    SVC -->|302 Redirect| A
 ```
 
 | Direction | Example |
@@ -55,35 +58,21 @@ This is a **critical skill** in system design interviews. Always calculate befor
 
 ### ⚡ QPS (Queries Per Second)
 
-#### Write Operations (URL Generation)
-
 ```
-20 million URLs/day
-= 20 × 2²⁰ / 86,400 seconds
-≈ 231 write operations/sec
-```
+Write Operations (URL Generation):
+  20 million URLs/day ÷ 86,400 seconds ≈ 231 write ops/sec
 
-#### Read Operations (URL Redirects)
-
-> Assumption: **Write : Read = 1 : 10**  (reads always dominate in URL shorteners)
-
-```
-Read ops/sec = 231 × 10 = 2,310 ops/sec
+Read Operations (URL Redirects):
+  Write : Read = 1 : 10
+  231 × 10 = 2,310 read ops/sec
 ```
 
 ### 💾 Storage Estimation (5 Years)
 
 ```
-Records = 20 million/day × 365 days × 5 years
-        = 20 × 2²⁰ × 1825
-        ≈ 36.5 Billion records
-
+Records = 20 million/day × 365 days × 5 years ≈ 36.5 Billion records
 Size per record = 100 bytes
-
-Total Storage = 36.5 Billion × 100 bytes
-              = 36.5 × 2³⁰ × 0.1 × 2¹⁰
-              = 3.65 × 2⁴⁰
-              ≈ 3.65 TB
+Total Storage = 36.5 Billion × 100 bytes ≈ 3.65 TB
 ```
 
 | Metric | Value |
@@ -92,8 +81,6 @@ Total Storage = 36.5 Billion × 100 bytes
 | Read QPS | ~2,310 ops/sec |
 | Total Records (5 yrs) | ~36.5 Billion |
 | Storage Required | ~3.65 TB |
-
-> 💡 **Real-world ref**: [Bit.ly](https://bit.ly) handles billions of clicks per month. Their infrastructure uses distributed caching (Redis) and sharded databases to serve ~6B clicks/month efficiently.
 
 ---
 
@@ -142,28 +129,30 @@ Response: 302 Redirect → https://www.example.com/api/v1/userId=124
 | `301` | Permanent Redirect | Browser caches forever | ✅ Client-side cached | 🔻 Minimal DB hits |
 | `302` | Temporary Redirect | No cache, hits server each time | ❌ Always hits server | ✅ Trackable |
 
-### Flow Diagram
+```mermaid
+sequenceDiagram
+    participant C as Client / Browser
+    participant S as bit.ly Server
+    participant DB as Database
 
-```
-301 Flow (Cached):
-Client ──► bit.ly/QW123 ──► [First visit: Server → DB lookup]
-                         ──► Browser caches {bit.ly/QW123 → longURL}
-                         ──► [Subsequent visits: skip server entirely]
+    Note over C,DB: 301 — Permanent (Cached)
+    C->>S: GET bit.ly/QW123 (first visit)
+    S->>DB: Lookup shortURL
+    DB-->>S: longURL
+    S-->>C: 301 + longURL (browser caches it)
+    C->>C: Subsequent visits skip server entirely ✅
 
-302 Flow (Trackable):
-Client ──► bit.ly/QW123 ──► Server ──► DB ──► 302 + longURL
-                        ──► [Every visit tracked, analytics possible]
+    Note over C,DB: 302 — Temporary (Trackable)
+    C->>S: GET bit.ly/QW123 (every visit)
+    S->>DB: Lookup shortURL
+    DB-->>S: longURL
+    S-->>C: 302 + longURL (no cache)
+    Note over S: Analytics tracked every visit 📊
 ```
 
 ### ✅ Which to Use?
 
-> **Use `302`** for production URL shorteners.
-
-**Why?**
-- Enables **user metrics** (click tracking, geography, device type)
-- Supports **A/B testing** on redirects
-- Keeps traffic flowing through your service (revenue/analytics)
-- **[Bit.ly](https://bit.ly)**, **[TinyURL](https://tinyurl.com)**, **[Rebrandly](https://rebrandly.com)** all use `302`
+> **Use `302`** for production URL shorteners — enables user metrics, A/B testing, click tracking.
 
 ---
 
@@ -171,12 +160,13 @@ Client ──► bit.ly/QW123 ──► Server ──► DB ──► 302 + long
 
 ### URL Shortening Flow (POST)
 
-```
-client ──[POST longURL]──► Server ──► Hash Function ──► shortURL
-                                          │
-                                     HashMap / DB
-                                     Key:   shortURL
-                                     Value: longURL
+```mermaid
+flowchart LR
+    C[Client] -->|POST longURL| S[Server]
+    S -->|run| H[Hash Function]
+    H -->|generates| SU[shortURL]
+    SU --> DB[(HashMap / DB\nkey: shortURL\nvalue: longURL)]
+    DB -->|shortURL returned| C
 ```
 
 **Steps:**
@@ -189,17 +179,14 @@ client ──[POST longURL]──► Server ──► Hash Function ──► sh
 
 ### URL Redirection Flow (GET)
 
+```mermaid
+flowchart LR
+    C[Client] -->|GET shortURL| S[Server]
+    S -->|map.get shortURL| DB[(DB / HashMap)]
+    DB -->|longURL| S
+    S -->|302 Redirect| C
+    C -->|Browser opens| LU[Long URL Page]
 ```
-client ──[GET shortURL]──► Server ──► map.get(shortURL) ──► longURL
-                                          │
-                                     302 Redirect ──► Browser opens longURL
-```
-
-**Steps:**
-1. User pastes `shortURL` in browser
-2. Browser sends `GET` request to service
-3. Server does `hashmap.get(shortURL)` → retrieves `longURL`
-4. Server responds with `302` → browser redirects
 
 ---
 
@@ -208,7 +195,7 @@ client ──[GET shortURL]──► Server ──► map.get(shortURL) ──�
 ### Initial Thought: NoSQL (Amazon DynamoDB / MongoDB)
 
 ```
-Hashmap in Memory ──► NoSQL (Key-Value Store)
+Hashmap in Memory → NoSQL (Key-Value Store)
   Key:   shortURL
   Value: longURL
 ```
@@ -220,8 +207,6 @@ Hashmap in Memory ──► NoSQL (Key-Value Store)
 ---
 
 ### Better Choice: ✅ SQL
-
-> **Switch to SQL for production.**
 
 ```sql
 CREATE TABLE urls (
@@ -241,56 +226,35 @@ CREATE INDEX idx_short ON urls(shortURL);
 | Complex queries | ❌ Limited | ✅ Full support |
 | Write speed | Slower | **Faster** |
 | Analytics queries | Hard | **Easy** |
-| User-level stats (`how many URLs/user?`) | Hard | **Easy JOIN** |
+| User-level stats | Hard | **Easy JOIN** |
 | Indexing | Basic | **Advanced** |
-
-> 💡 **Real-world ref**: [Pinterest](https://medium.com/pinterest-engineering) migrated from NoSQL to MySQL shards for exactly this reason — analytics & complex queries became essential.
 
 ---
 
 ## 8. Short URL Generation Strategies
 
-### 🔢 Calculating URL Length — How Many Characters?
+### 🔢 Calculating URL Length
 
 **Available characters:** `0–9`, `a–z`, `A–Z` → **62 symbols**
 
 ```
-URL length = n characters
-Possible combinations = 62ⁿ
-
-n=1 →          62 URLs
-n=2 →       3,844 URLs
-n=3 →     238,328 URLs
-n=6 →  56,800,235,584 URLs  ← ~56 Billion ✅
-
+n=6 → 62^6 = 56,800,235,584 URLs  ← ~56 Billion ✅
 Need: 36.5 Billion  →  n = 6 is sufficient
 ```
-
-**Result:** `www.bit.ly/_ _ _ _ _ _` (6-character short URL)
 
 ---
 
 ### Strategy 1: Hashing (MD5 / SHA-1 / SHA-256)
 
-```
-Long URL ──► [Hash Fn] ──► long_hash_string
-                            "233eqwe23432eqw23"
-                                    │
-                           Take first 6 chars
-                                    │
-                               "asfw34"  ← shortURL
-```
-
-**Problem: Collisions!**
-
-```
-Loop:
-  shortURL = hash(longURL)
-  if shortURL exists in DB:
-      longURL = longURL + "salt"   ← keep modifying
-      try again
-  else:
-      save to DB
+```mermaid
+flowchart LR
+    L[Long URL] --> H["Hash Function\n(MD5/SHA-1)"]
+    H --> HS["long_hash_string\n233eqwe23432eqw23"]
+    HS -->|take first 6 chars| SU["shortURL\nasfw34"]
+    SU -->|check collision| DB{Already in DB?}
+    DB -->|Yes - collision!| ADD["longURL = longURL + salt\nretry"]
+    ADD --> H
+    DB -->|No| SAVE[Save to DB ✅]
 ```
 
 **Disadvantages:**
@@ -317,38 +281,25 @@ Loop:
 
 #### Example: Convert `14320` to Base62
 
-```
-14320 ÷ 62 = 230 remainder 60  →  'Y'
-  230 ÷ 62 =   3 remainder 44  →  'I'
-    3 ÷ 62 =   0 remainder  3  →  '3'
-
-Read remainders bottom-up:  3IY
-```
-
-```
-Long URL: www.example.com
-Unique ID: 14320
-Short URL: www.bit.ly/3IY   ✅
+```mermaid
+flowchart TD
+    A["14320 ÷ 62 = 230 remainder 60 → 'Y'"]
+    B["230 ÷ 62 = 3 remainder 44 → 'I'"]
+    C["3 ÷ 62 = 0 remainder 3 → '3'"]
+    D["Read bottom-up: 3IY"]
+    A --> B --> C --> D
 ```
 
-**SQL Record:**
 ```
-| id    | shortURL | longURL             |
-|-------|----------|---------------------|
-| 14320 | 3IY      | www.example.com     |
+Long URL: www.example.com   Unique ID: 14320   Short URL: www.bit.ly/3IY ✅
 ```
-
-#### Advantages vs Disadvantages
 
 | | Base62 ✅ |
 |-|-----------|
 | ✅ Collision-free | Always unique (ID is unique → encoded value is unique) |
 | ✅ Fast | No recursive lookup needed |
 | ❌ Needs unique ID generator | Distributed systems need coordination |
-| ❌ Variable length | ID=1 → `1` (1 char), ID=14320 → `3IY` (3 chars) |
 | ❌ Guessable | Sequential IDs → next URL is predictable |
-
-> 💡 **Real-world ref**: [YouTube](https://youtube.com) uses Base64 encoding for video IDs (e.g., `dQw4w9WgXcQ`). [Instagram](https://instagram.com) uses Base62 for photo IDs.
 
 ---
 
@@ -358,80 +309,52 @@ Short URL: www.bit.ly/3IY   ✅
 
 > In a distributed system with **multiple DB shards**, each shard generates its own IDs — **two shards can generate the same ID!**
 
-**Solution: Centralized Unique ID Generator**
+```mermaid
+flowchart TD
+    IDG["Unique ID Generator\n(e.g. Snowflake - Centralized)"]
+    IDG -->|unique_id| S1[Server 1]
+    IDG -->|unique_id| S2[Server 2]
+    IDG -->|unique_id| S3[Server 3]
 
-```
-                  ┌─────────────────────┐
-                  │  Unique ID Generator │  ← Centralized
-                  │   (e.g. Snowflake)   │
-                  └──────────┬──────────┘
-                             │ unique_id
-              ┌──────────────┼──────────────┐
-              ▼              ▼              ▼
-          Server 1       Server 2       Server 3
-              │              │              │
-         base62(id)     base62(id)     base62(id)
-              │              │              │
-              └──────────────┼──────────────┘
-                             ▼
-                    ┌────────────────┐
-                    │   SQL DB (Sharded) │
-                    └────────────────┘
+    S1 -->|base62 id| DB[(SQL DB - Sharded)]
+    S2 -->|base62 id| DB
+    S3 -->|base62 id| DB
 ```
 
-### Complete System Architecture
+### Complete System Architecture — POST (Store)
 
-#### Storing (POST) Flow
-```
-                              Load Balancer
-Client ──[POST longURL]──►  ──────────────  ──► Application Server
-                                                        │
-                                            ┌───────────┴───────────┐
-                                            │                       │
-                                          Cache                     DB
-                                       (Redis)               (SQL Shards)
-                                            │
-                                    Check if longURL
-                                    already exists
-                                    (avoid duplicates)
+```mermaid
+flowchart TD
+    C[Client] -->|POST longURL| LB[Load Balancer]
+    LB --> AS[Application Server]
+    AS --> CA{Check Redis Cache\nlongURL already exists?}
+    CA -->|Cache Hit → return existing shortURL| C
+    CA -->|Cache Miss| IDG[Unique ID Generator]
+    IDG --> ENC[Base62 Encode]
+    ENC --> SAVE[(SQL DB - Sharded)]
+    SAVE --> RDW[Write to Redis Cache]
+    RDW -->|Return shortURL| C
 ```
 
-#### Redirection (GET) Flow
+### Complete System Architecture — GET (Redirect)
+
+```mermaid
+flowchart TD
+    C[Client] -->|GET shortURL| LB[Load Balancer]
+    LB --> AS[Application Server]
+    AS --> CA{Redis Cache\nHIT?}
+    CA -->|Cache Hit| R[302 Redirect to longURL ✅]
+    CA -->|Cache Miss| DB[(SQL DB - Sharded)]
+    DB --> RDW[Update Redis Cache]
+    RDW --> R
+    R --> C
 ```
-                              Load Balancer
-Client ──[GET shortURL]──►  ──────────────  ──► Application Server
-                                                        │
-                                            ┌───────────┴───────────┐
-                                            │                       │
-                                          Cache ◄──── HIT?          DB
-                                       (Redis)     MISS ────────────►
-                                            │
-                                      302 + longURL
-                                            │
-                                    Client redirects
-```
 
-> 💡 **Cache Strategy**: Cache hot short URLs (most clicked). Use **LRU eviction**. [Cloudflare](https://cloudflare.com) reports ~80% of traffic served from cache for URL services.
-
----
-
-### Maximum Short URL Length — Why 6 is Enough
-
-```
-Our need:    36.5 Billion records
-62^6 gives:  56  Billion combinations
-
-56 Billion > 36.5 Billion  ✅
-
-Unique ID will NEVER exceed 56 Billion within 5 years
-→ Base62 result will ALWAYS be ≤ 6 characters
-```
+> 💡 **Cache Strategy**: Cache hot short URLs (most clicked). Use **LRU eviction**.
 
 ---
 
 ## 10. Key Takeaways
-
-> The **mental model** you need to ace this in interviews.
 
 | Concept | Decision | Reason |
 |---------|----------|--------|

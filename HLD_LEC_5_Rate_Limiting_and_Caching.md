@@ -14,16 +14,21 @@ Rate Limiting controls **how many requests a client can send to a server within 
 
 ## 🏗️ Where to Apply Rate Limiting?
 
+```mermaid
+flowchart LR
+    C[Client] --> FE[Frontend]
+    FE --> GW["✅ API Gateway / Middleware\n(Best Place — centralized, scalable)"]
+    GW --> BE[Backend]
+
+    C2[Client] -.->|❌ Client-side only| FE
+    note["Client-side: Easily bypassed\nServer-side: Reliable\nAPI Gateway: Best practice"]
+```
+
 | Layer | Notes |
 |-------|-------|
 | **Client Side** | ❌ Worst — can be bypassed easily |
 | **Server Side** | ✅ More reliable |
 | **Middleware / API Gateway** | ✅ Best practice for large-scale systems |
-
-### Architecture Flow:
-```
-Client → Frontend → Middleware (API Gateway with Rate Limiting) → Backend
-```
 
 ---
 
@@ -71,10 +76,13 @@ X-duration  : seconds    → per this time window
 
 ### 1️⃣ Token Bucket Algorithm
 
-```
-[Token Builder] ──tokens──▶ [Bucket] ──▶ [Server]
-                                │
-                           (drop if empty)
+```mermaid
+flowchart LR
+    TB["Token Builder\n(adds 10 tokens/sec)"] -->|fills| B["Bucket\n(max 20 tokens)"]
+    R[Incoming Request] -->|takes 1 token| B
+    B -->|token available| S[Server ✅]
+    B -->|bucket empty| D[Drop Request ❌]
+    B -->|bucket full, new tokens| OV[Overflow — discard tokens]
 ```
 
 **Configuration:**
@@ -97,10 +105,12 @@ X-duration  : seconds    → per this time window
 
 ### 2️⃣ Leaky Bucket Algorithm *(Global Rate Limiting)*
 
-```
-Requests ──▶ [Bucket/Queue] ──outflow──▶ [Server]
-                  │
-             (drop if full)
+```mermaid
+flowchart LR
+    R1[Request surge] --> Q["Queue / Bucket\n(capacity: 3)"]
+    R2[More requests] --> Q
+    Q -->|constant outflow: 2 req/sec| S[Server]
+    Q -->|bucket full → overflow| D[Drop ❌]
 ```
 
 **Configuration:**
@@ -121,19 +131,37 @@ Requests ──▶ [Bucket/Queue] ──outflow──▶ [Server]
 
 ### 3️⃣ Fixed Window Counter
 
-In a fixed time interval (e.g., 1 second or 1 minute), only a **specific number of requests** are allowed.
+```mermaid
+gantt
+    title Fixed Window Counter (limit = 3 req/window)
+    dateFormat X
+    axisFormat s%s
 
-```
-Time:    |---window 1---|---window 2---|---window 3---|
-Counter:       3 req          3 req          3 req
+    section Window 1 (00-60s)
+    req1 :0, 1
+    req2 :20, 21
+    req3 :40, 41
+
+    section Window 2 (60-120s)
+    req1 :60, 61
+    req2 :80, 81
+    req3 :100, 101
 ```
 
 **Fixed Counter = 3**
 
+**⚠️ Edge Case — Burst at Window Boundary:**
+```
+Limit = 3 req/minute
+User sends 3 req at :59 (end of Window 1) ✅ allowed
+User sends 3 req at :01 (start of Window 2) ✅ allowed
+→ 6 requests in 2 seconds — server takes 2x the load! 💥
+```
+
 | | |
 |-|-|
 | ✅ **Pros** | Simple to implement |
-| ❌ **Cons** | **Burst at window edges** — e.g., 3 req at end of window + 3 req at start of next = 6 req in a short span → can crash server |
+| ❌ **Cons** | **Burst at window edges** — e.g., 3 req at end + 3 req at start = 6 in a short span |
 
 ---
 
@@ -141,18 +169,18 @@ Counter:       3 req          3 req          3 req
 
 > 🏆 **Best Algorithm for Rate Limiting** — Strict but slow & memory-consuming
 
-**How it works:**
-1. Stores **each request with a timestamp** in a log
-2. When a new request arrives → **remove all outdated** (expired) entries from the log
-3. Log the new request → check if **counter limit is reached**
-   - If **under limit** → forward to server
-   - If **over limit** → drop request
+```mermaid
+sequenceDiagram
+    participant R as Request (01:02)
+    participant L as Log
+    participant S as Server
 
-```
-Timeline:  00:01  00:30  00:59  01:02  01:04
-           [req1] [req2] [req3] [req4] [req5]
-                                 ↑
-                            3 req/sec limit
+    R->>L: New request arrives at 01:02
+    L->>L: Remove all entries older than (01:02 - 1min) = 00:02
+    Note over L: Removed: [00:01]. Remaining: [00:30, 00:59]
+    L->>L: Add new entry: 01:02
+    Note over L: Log = [00:30, 00:59, 01:02] → count = 3
+    L->>S: count(3) ≤ limit(3) → ✅ Allow
 ```
 
 > Uses **LINUX EPOCH timestamps** for precision
@@ -170,41 +198,40 @@ Combines Fixed Window + Sliding Window Log for a **balanced** approach.
 
 **Formula:**
 ```
-Allowed Requests = (Req in current interval) + (Req in previous interval × overlap%)
+Estimated Requests = (Req in current window) + (Req in previous window × overlap%)
 ```
 
 **Example** (7 req/minute limit, 70% overlap):
 ```
 = 4 (current) + 5 (previous) × 0.7
 = 4 + 3.5
-= 7.5  →  over limit → drop
+= 7.5  →  over limit → drop ❌
 ```
 
-```
-|----prev 70%----|----curr 30%----|
-       rolling window
+```mermaid
+xychart-beta
+    title "Sliding Window Counter — Rolling Overlap"
+    x-axis ["Prev Window (70% applies)", "Current Window (100%)"]
+    y-axis "Requests" 0 --> 8
+    bar [3.5, 4]
+    line [7, 7]
 ```
 
 ---
 
 ## 🏗️ Building Your Own Rate Limiter
 
-### Algorithm Choice: **Fixed Window Counter**
+### Architecture
 
-**Expected Counter** = 3 | **Current Counter** = 3
-
-### Architecture:
-
-```
-Client ──▶ Rate Limiter ──▶ Server
-               │
-           [Redis Cache]  ←── (In-Memory, fast)
-               │
-            [DB Rules]
-               │
-          [Cache Workers]
-               │
-         [Message Queue] ──▶ Kafka
+```mermaid
+flowchart TD
+    C[Client] --> RL["Rate Limiter\n(Middleware)"]
+    RL --> R[(Redis Cache\nIn-Memory, Fast)]
+    R --> DBR[(DB Rules\nconfig)]
+    R -->|counter < limit| S[Server ✅]
+    R -->|counter ≥ limit| E["429 Too Many Requests ❌"]
+    S --> MQ[Message Queue / Kafka]
+    MQ --> W[Backend Workers]
 ```
 
 ### Why Redis over DB?
@@ -214,8 +241,9 @@ Client ──▶ Rate Limiter ──▶ Server
 | **Redis (In-Memory Cache)** | ✅ Fast — ideal for rate limiting |
 
 ### Redis Command Used:
-```
+```redis
 INCR   →  Atomically increment counter in Redis
+EXPIRE →  Auto-reset key after window duration
 ```
 
 ### Flow:
