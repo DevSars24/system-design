@@ -34,13 +34,22 @@ Access Token  =  Temporary Entry Pass     (expires fast, limited damage if stole
 Refresh Token =  Long-Term Identity Card  (used only to renew the entry pass)
 ```
 
-```
-Client ──▶ API Request + Access Token ──▶ Server
-                                              ↓
-                                     Verifies access token
-                                              ↓
-                              ✅ Valid → Return data
-                              ❌ Expired → 401 → Client uses refresh token
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as Server
+
+    C->>S: API Request + Access Token
+    S->>S: Verify Access Token
+    alt Valid Token
+        S-->>C: ✅ Return Data
+    else Expired Token
+        S-->>C: ❌ 401 Unauthorized
+        C->>S: POST /api/refresh-token (Refresh Token)
+        S-->>C: ✅ New Access Token
+        C->>S: Retry Original Request
+        S-->>C: ✅ Return Data
+    end
 ```
 
 ---
@@ -72,13 +81,12 @@ Access Token valid for: 15 minutes
 
 ### ✅✅ Solution: Short Access Token + Long Refresh Token
 
-```
-Access Token:  15 minutes  → small theft window
-Refresh Token: 7 days      → seamless UX (auto-renew without user noticing)
-
-Best of both worlds:
-  Security of short-lived access ✅
-  UX of long-lived sessions ✅
+```mermaid
+graph LR
+    A["Access Token\n(15 min)"] -->|Small theft window| B["✅ Security"]
+    C["Refresh Token\n(7 days)"] -->|Auto-renew silently| D["✅ Great UX"]
+    B --> E["Best of Both Worlds"]
+    D --> E
 ```
 
 ---
@@ -99,6 +107,17 @@ Backend:
 1. Fetch user from DB by email
 2. Verify password using `bcrypt.compare(input, storedHash)`
 3. If valid → generate both tokens
+
+```mermaid
+flowchart TD
+    A([User submits login form]) --> B[POST /api/login]
+    B --> C{bcrypt.compare\ninput vs storedHash}
+    C -- ❌ Wrong Password --> D[401 Unauthorized]
+    C -- ✅ Correct --> E[Generate Access Token\nexp: 15m]
+    E --> F[Generate Refresh Token\nexp: 7d]
+    F --> G[Set httpOnly Cookies]
+    G --> H([200 Login Successful])
+```
 
 ### 🔐 Step 2 — Creating Tokens
 
@@ -142,15 +161,17 @@ res
 ```
 
 **Why HTTP-only cookies?**
-```
-localStorage / sessionStorage:
-  → Accessible via JS → XSS attack can steal tokens
-  → ❌ Not safe for sensitive tokens
 
-HTTP-only Cookie:
-  → JS cannot access it (document.cookie blocked)
-  → Browser sends it automatically with every request
-  → ✅ XSS-proof
+```mermaid
+graph TD
+    A[Token Storage Options] --> B[localStorage / sessionStorage]
+    A --> C[HTTP-only Cookie]
+
+    B --> D["❌ JS can read it\ndocument.cookie / localStorage.getItem()"]
+    D --> E["❌ XSS attack steals token instantly"]
+
+    C --> F["✅ JS cannot access it\nhttpOnly blocks document.cookie"]
+    F --> G["✅ XSS-proof\nBrowser sends it automatically"]
 ```
 
 ---
@@ -184,22 +205,11 @@ const verifyToken = (req, res, next) => {
 };
 ```
 
-| ✅ Good for | ❌ Watch out |
-|------------|-------------|
-| Mobile apps | Must store token somewhere in frontend |
-| SPA + REST APIs | In-memory = lost on page refresh |
-| Cross-origin APIs | localStorage = XSS risk |
-
 ---
 
 ### ✅ Method 2: Cookies (Automatic — More Secure)
 
-```
-Browser automatically sends:
-Cookie: accessToken=xxxx; refreshToken=yyyy
-```
-
-No manual attachment needed — browser handles it.
+Browser automatically sends the cookie on every request — no manual attachment needed.
 
 **Backend reads it:**
 ```javascript
@@ -217,13 +227,22 @@ const verifyToken = (req, res, next) => {
 };
 ```
 
-| ✅ Good for | ❌ Watch out |
-|------------|-------------|
-| Web apps (same domain) | Requires CSRF protection (use `sameSite: "Strict"`) |
-| More secure against XSS | Cross-origin cookies need `sameSite: "None" + Secure` |
-| Seamless UX | Slightly more backend setup |
-
 ### Side-by-Side Comparison
+
+```mermaid
+quadrantChart
+    title Token Delivery Method Comparison
+    x-axis Low Security --> High Security
+    y-axis Hard to Implement --> Easy to Implement
+    quadrant-1 Best for Web Apps
+    quadrant-2 Avoid
+    quadrant-3 Use Carefully
+    quadrant-4 Best for Mobile/APIs
+    "HTTP-only Cookie": [0.8, 0.65]
+    "localStorage + Header": [0.2, 0.85]
+    "Memory + Header": [0.7, 0.45]
+    "sessionStorage + Header": [0.3, 0.75]
+```
 
 | | Authorization Header | Cookies |
 |-|---------------------|---------|
@@ -239,34 +258,30 @@ const verifyToken = (req, res, next) => {
 
 > This is the seamless "auto-renew" mechanism — the user never sees a login prompt.
 
-### Full Sequence
+```mermaid
+sequenceDiagram
+    participant U as User / Browser
+    participant C as Client App
+    participant S as Server
 
-```
-1. User makes API request with expired access token
+    U->>C: Triggers API action
+    C->>S: GET /api/profile (expired access token)
+    S-->>C: 401 Unauthorized - Token Expired
 
-2. Server responds:
-   HTTP 401 Unauthorized
-   { "error": "Token Expired" }
+    Note over C: Intercepts 401 automatically
+    C->>S: POST /api/refresh-token (sends refresh token)
 
-3. Frontend intercepts the 401 (axios interceptor / fetch wrapper)
-
-4. Frontend sends refresh token to special endpoint:
-   POST /api/refresh-token
-   Cookie: refreshToken=yyyy...  (auto-sent if using cookies)
-
-5. Backend verifies the refresh token:
-   const decoded = jwt.verify(refreshToken, process.env.REFRESH_SECRET);
-
-6. Backend issues a brand new access token:
-   const newAccessToken = jwt.sign(
-     { userId: decoded.userId },
-     process.env.ACCESS_SECRET,
-     { expiresIn: "15m" }
-   );
-
-7. New access token sent back to client
-
-8. Client retries the original request — user never noticed anything
+    alt Refresh Token Valid
+        S->>S: jwt.verify(refreshToken, REFRESH_SECRET)
+        S->>S: jwt.sign(new access token, 15m)
+        S-->>C: 200 + New Access Token (set in cookie)
+        C->>S: Retry GET /api/profile (new access token)
+        S-->>C: 200 + Profile Data
+        C-->>U: ✅ Data displayed (user noticed nothing)
+    else Refresh Token Expired / Invalid
+        S-->>C: 403 Forbidden
+        C-->>U: 🔒 Redirect to Login Page
+    end
 ```
 
 ### Backend Refresh Endpoint
@@ -303,12 +318,17 @@ app.post("/api/refresh-token", (req, res) => {
 
 ### Refresh Token Rotation (Advanced Security)
 
-Every time a refresh token is used → **issue a new refresh token too** (and invalidate the old one). This limits damage if a refresh token is stolen.
+Every time a refresh token is used → **issue a new refresh token too** (and invalidate the old one):
 
-```
-Old Refresh Token → Used → Server issues:
-  New Access Token (15m)
-  New Refresh Token (7d)  ← old one is now invalidated in DB
+```mermaid
+flowchart LR
+    A[Old Refresh Token] -->|Client sends it| B{Server verifies}
+    B --> C[Issues New Access Token\n15 min]
+    B --> D[Issues New Refresh Token\n7 days]
+    B --> E[Invalidates Old Refresh Token\nin DB]
+    C --> F([Client stores new tokens])
+    D --> F
+    E --> G([Old token rejected if reused\n= Token Theft Detected])
 ```
 
 ---
@@ -317,20 +337,20 @@ Old Refresh Token → Used → Server issues:
 
 ### Token Storage Decision Tree
 
-```
-Building a web app (same domain)?
-  → HTTP-only Cookies
-  → Add CSRF protection (sameSite: Strict or CSRF token)
+```mermaid
+flowchart TD
+    A([What are you building?]) --> B{Web App\nsame domain?}
+    B -- Yes --> C[Use HTTP-only Cookies]
+    C --> D[Add CSRF Protection\nsameSite: Strict]
 
-Building a mobile app?
-  → Authorization Header
-  → Store access token in memory only
-  → Store refresh token in secure storage (Keychain / Keystore)
+    B -- No --> E{Mobile App?}
+    E -- Yes --> F[Authorization Header]
+    F --> G[Access token in memory\nRefresh in Keychain/Keystore]
 
-SPA + external API (cross-origin)?
-  → Authorization Header
-  → Store access token in memory (NOT localStorage)
-  → Use refresh token rotation
+    E -- No --> H{SPA + External API\ncross-origin?}
+    H -- Yes --> I[Authorization Header]
+    I --> J[Access token in memory only\nNOT localStorage]
+    J --> K[Use Refresh Token Rotation]
 ```
 
 ### Attack Surface & Mitigations
@@ -345,16 +365,20 @@ SPA + external API (cross-origin)?
 
 ### JWT Structure (What's Inside)
 
-```
-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiIxMjMiLCJpYXQiOjE2MjM...
-└──────────────────────────────────────┘└──────────────────────────────────────┘
-              Header (base64)                     Payload (base64)
-              { alg: "HS256", typ: "JWT" }        { userId: "123", exp: ... }
+```mermaid
+graph LR
+    A["eyJhbGciOiJIUzI1NiJ9\n(Header - base64)"] --> D["."]
+    D --> B["eyJ1c2VySWQiOiIxMjMifQ\n(Payload - base64)"]
+    B --> E["."]
+    E --> C["SflKxwRJSMeKKF2QT4fw\n(Signature - HMAC-SHA256)"]
 
-.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c
-└──────────────────────────────────────────────┘
-              Signature (HMAC-SHA256)
-              = HMAC(header + "." + payload, SECRET_KEY)
+    A:::header
+    B:::payload
+    C:::sig
+
+    classDef header fill:#4f46e5,color:#fff
+    classDef payload fill:#0891b2,color:#fff
+    classDef sig fill:#059669,color:#fff
 ```
 
 > ⚠️ **JWT payloads are base64 encoded — NOT encrypted.** Anyone can decode and read them. Never put sensitive data (passwords, credit cards) in JWT payload.
@@ -378,41 +402,37 @@ REFRESH_SECRET=another-different-256-bit-random-key-here
 | **Standard app** | 15 min | 7 days |
 | **Low security / convenience** | 1 hour | 30 days |
 
-### Complete Flow Diagram
+### Complete Auth System — Architecture Overview
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     LOGIN FLOW                               │
-│                                                             │
-│  User ──▶ POST /login ──▶ bcrypt.compare() ──▶ ✅          │
-│                                    │                        │
-│                          jwt.sign(access, 15m)              │
-│                          jwt.sign(refresh, 7d)              │
-│                                    │                        │
-│                          Set httpOnly cookies               │
-│                                    │                        │
-│                          User is logged in ✅               │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph LOGIN ["🟢 Login Flow"]
+        L1([User submits credentials]) --> L2[POST /login]
+        L2 --> L3{bcrypt.compare}
+        L3 -- ✅ --> L4[jwt.sign - Access 15m]
+        L3 -- ❌ --> L5[401 Unauthorized]
+        L4 --> L6[jwt.sign - Refresh 7d]
+        L6 --> L7[Set httpOnly Cookies]
+        L7 --> L8([Logged In ✅])
+    end
 
-┌─────────────────────────────────────────────────────────────┐
-│                  API REQUEST FLOW                            │
-│                                                             │
-│  Request ──▶ Middleware verifyToken()                       │
-│                    │                                        │
-│           ┌────────┴────────┐                               │
-│        ✅ Valid          ❌ Expired                         │
-│           │                 │                               │
-│       Proceed          POST /refresh-token                  │
-│                             │                               │
-│                    Verify refresh token                     │
-│                             │                               │
-│                  ┌──────────┴──────────┐                    │
-│               ✅ Valid            ❌ Invalid                 │
-│                  │                    │                     │
-│          Issue new access token   Force re-login            │
-│                  │                                          │
-│          Retry original request                             │
-└─────────────────────────────────────────────────────────────┘
+    subgraph API ["📡 API Request Flow"]
+        A1([API Request]) --> A2[verifyToken middleware]
+        A2 --> A3{Token valid?}
+        A3 -- ✅ Valid --> A4([Proceed to route handler])
+        A3 -- ❌ Expired --> A5[Return 401]
+    end
+
+    subgraph REFRESH ["🔁 Refresh Flow"]
+        R1([Client catches 401]) --> R2[POST /refresh-token]
+        R2 --> R3{Refresh token valid?}
+        R3 -- ✅ --> R4[Issue new Access Token]
+        R4 --> R5[Retry original request]
+        R3 -- ❌ --> R6([Force re-login 🔒])
+    end
+
+    L8 --> A1
+    A5 --> R1
 ```
 
 ---
