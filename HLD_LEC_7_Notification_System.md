@@ -38,13 +38,16 @@ When designing a notification system, we must clarify the scope by addressing ke
 
 ## 📐 2. Core Entities & Basic Flow
 
-A notification system comprises several core entities working together:
+```mermaid
+flowchart LR
+    T["Service\n(Trigger)"] --> NS["Notification Service\n(Payloads/Templates)"]
+    NS --> EX["Executor\n(Provider/Worker)"]
+    EX --> CL["Client\n(Device)"]
 
-```
-┌──────────────┐      ┌──────────────────────┐      ┌────────────┐      ┌──────────┐
-│   Service    │ ───> │ Notification Service │ ───> │  Executor  │ ───> │  Client  │
-│  (Trigger)   │      │ (Payloads/Templates) │      │ (Provider) │      │ (Device) │
-└──────────────┘      └──────────────────────┘      └────────────┘      └──────────┘
+    style T fill:#3498db,color:#fff
+    style NS fill:#e67e22,color:#fff
+    style EX fill:#27ae60,color:#fff
+    style CL fill:#8e44ad,color:#fff
 ```
 
 1. **Service (Trigger):** Any microservice (e.g., Order Service, Auth Service) or scheduled Cron-job that triggers a notification request.
@@ -55,8 +58,6 @@ A notification system comprises several core entities working together:
 ---
 
 ## 📊 3. Back-of-the-Envelope Calculations (BEC)
-
-Before designing the architecture, we estimate the system scale to size our database, queues, and bandwidth.
 
 ### Assumptions:
 * **Daily Active Users (DAU):** $1\text{ Million}$
@@ -85,14 +86,10 @@ Assume the raw payload size (metadata + body + headers) sent to our server avera
 $$\text{Total Daily Data Transmitted} = 10\text{ Million} \times 1\text{ KB} = 10\text{ GB/day}$$
 
 #### Average Queries Per Second (QPS):
-$$\text{Seconds in a day} = 24 \times 3600 = 86,400\text{ seconds}$$
 $$\text{Average QPS} = \frac{10,000,000\text{ notifications}}{86,400\text{ seconds}} \approx 115.7\text{ req/sec}$$
 
 #### Peak QPS (Assuming $3\text{x}$ average load):
 $$\text{Peak QPS} = 115.7 \times 3 \approx 350\text{ req/sec}$$
-
-#### Bandwidth Usage:
-$$\text{Average Bandwidth} = \frac{10\text{ Million} \times 1\text{ KB}}{86,400\text{ seconds}} \approx 115.7\text{ KB/second}$$
 
 ---
 
@@ -101,7 +98,6 @@ $$\text{Average Bandwidth} = \frac{10\text{ Million} \times 1\text{ KB}}{86,400\
 ### A. API Endpoints
 
 #### 1. Retrieve User Settings & Info
-Retrieves user contact information and specific opt-in/opt-out notification channel permissions.
 
 * **HTTP Method:** `GET`
 * **Path:** `/api/v1/users/{userId}`
@@ -121,7 +117,6 @@ Retrieves user contact information and specific opt-in/opt-out notification chan
 ```
 
 #### 2. Send Notification
-Endpoint triggered by internal microservices to dispatch a notification.
 
 * **HTTP Method:** `POST`
 * **Path:** `/api/v1/notifications/send/{userId}`
@@ -143,43 +138,11 @@ Endpoint triggered by internal microservices to dispatch a notification.
 }
 ```
 
-#### 3. Fetch Notification History
-Fetches log of notifications sent to a specific user with filtering capability.
-
-* **HTTP Method:** `GET`
-* **Path:** `/api/v1/notifications/history`
-* **Query Parameters:**
-  * `userId`: `usr_101`
-  * `type`: `SMS` (Optional)
-  * `fromDate`: `2026-05-20` (Optional)
-* **Response (200 OK):**
-```json
-[
-  {
-    "notificationId": "notif_301",
-    "status": "delivered",
-    "type": "SMS",
-    "content": "Hi Aditya, your order #10928 has been dispatched.",
-    "sentAt": "2026-05-23T12:00:00Z"
-  },
-  {
-    "notificationId": "notif_289",
-    "status": "failed",
-    "type": "EMAIL",
-    "content": "Weekly Newsletter",
-    "sentAt": "2026-05-21T09:15:00Z"
-  }
-]
-```
-
 ---
 
 ### B. Database Schema Design (SQL DDL)
 
-To maintain consistent user records, dynamic templates, and detailed logs, we use a relational database structure.
-
 ```sql
--- 1. Users Table
 CREATE TABLE users (
     user_id VARCHAR(50) PRIMARY KEY,
     username VARCHAR(100) NOT NULL,
@@ -188,7 +151,6 @@ CREATE TABLE users (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 2. User Notification Permissions (Preferences)
 CREATE TABLE user_permissions (
     user_id VARCHAR(50) PRIMARY KEY,
     allow_push BOOLEAN DEFAULT TRUE,
@@ -198,30 +160,27 @@ CREATE TABLE user_permissions (
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
 );
 
--- 3. Notification Templates
 CREATE TABLE notification_templates (
     template_id VARCHAR(50) PRIMARY KEY,
     template_name VARCHAR(100) NOT NULL,
-    channel_type VARCHAR(20) NOT NULL, -- 'PUSH', 'SMS', 'EMAIL'
-    subject_template VARCHAR(255),    -- Used for emails
-    body_template TEXT NOT NULL,       -- e.g., "Hello {{userName}}, your code is {{code}}"
+    channel_type VARCHAR(20) NOT NULL,
+    subject_template VARCHAR(255),
+    body_template TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 4. Notification History (Log table for Audits and Analytics)
 CREATE TABLE notification_history (
     notification_id VARCHAR(50) PRIMARY KEY,
     user_id VARCHAR(50) NOT NULL,
     channel_type VARCHAR(20) NOT NULL,
-    recipient_destination VARCHAR(255) NOT NULL, -- email address, phone number, or push token
-    status VARCHAR(20) NOT NULL,                  -- 'QUEUED', 'SENT', 'FAILED', 'DELIVERED'
+    recipient_destination VARCHAR(255) NOT NULL,
+    status VARCHAR(20) NOT NULL,
     retry_count INT DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(user_id)
 );
 
--- Add Index for history lookups (optimizes GET /notifications/history)
 CREATE INDEX idx_user_history ON notification_history(user_id, created_at DESC);
 ```
 
@@ -229,100 +188,95 @@ CREATE INDEX idx_user_history ON notification_history(user_id, created_at DESC);
 
 ## 🚫 5. Problems with the Initial (Synchronous) Design
 
-In a simple monolithic design, we would have services directly calling the Notification Server, which then synchronously calls external 3rd-party services to dispatch notifications.
+```mermaid
+sequenceDiagram
+    participant S as Service (e.g. Order Svc)
+    participant NS as Notification Server
+    participant TP as 3rd-Party API (Twilio/APNs)
+    participant C as Client Device
 
-```
-┌───────────┐      ┌──────────────┐      ┌───────────┐      ┌──────────┐
-│ Service 1 │ ───> │ Notification │ ───> │ 3rd-Party │ ───> │  Client  │
-└───────────┘      │    Server    │      │ API (SMS) │      └──────────┘
-                   └──────────────┘      └───────────┘
-                         ▲                     │ (Blocks execution)
-                         └─────── Wait ────────┘
+    S->>NS: Send notification (BLOCKS)
+    NS->>TP: HTTP call to 3rd party (slow 200ms–2s)
+    Note over NS,TP: Service is BLOCKED waiting here
+    TP-->>NS: Response
+    NS-->>S: Done (finally unblocked)
+    TP->>C: Notification delivered
 ```
 
 ### Why this design fails in production:
 1. **Single Point of Failure (SPOF):** If the notification server crashes, the entire system's ability to alert users fails.
-2. **Synchronous Bottleneck & Latency:** 3rd party APIs (like Twilio, Mailchimp, Apple APNs) can take hundreds of milliseconds or even seconds to respond. The internal application service is blocked waiting for the API call to complete, degrading response times.
-3. **Hard to Scale:** During peak traffic events, if the notification server is saturated with requests, it cannot handle them asynchronously, leading to memory exhausts or thread pools running dry.
-4. **No Retry Mechanism:** If a 3rd party gateway is down or rate-limiting us, the notification fails permanently. There is no automated buffer to retry.
-5. **Tight Coupling:** The calling services must wait for the notification to be processed, meaning an email failure could block a checkout transaction.
+2. **Synchronous Bottleneck & Latency:** 3rd party APIs can take hundreds of milliseconds or even seconds. The internal service is **blocked** waiting.
+3. **Hard to Scale:** During peak traffic, the server gets saturated with no async buffer.
+4. **No Retry Mechanism:** If a 3rd party gateway is down, the notification fails permanently.
+5. **Tight Coupling:** An email failure could block a checkout transaction.
 
 ---
 
 ## 🚀 6. Scaled Asynchronous Architecture
 
-To build a production-grade system, we decouple the notification pipeline using **Message Queues (MQ)**, **Workers**, **Caching**, and **Databases**.
+```mermaid
+flowchart TD
+    S1[Service 1] -->|Trigger| PUB
+    S2[Service N] -->|Trigger| PUB
 
-### Architectural Diagram
+    RC[(Redis Cache\nUser Info, Permissions, Templates)] -->|Check Cache| PUB
 
+    PUB["Publisher Server\n- Validate user & permissions\n- Compile template placeholders\n- Push to appropriate MQ"]
+
+    PUB --> APNs_Q[APNs Queue]
+    PUB --> FCM_Q[FCM Queue]
+    PUB --> Twilio_Q[Twilio Queue]
+    PUB --> Mail_Q[Mailchimp Queue]
+
+    APNs_Q --> APNs_W[APNs Workers]
+    FCM_Q --> FCM_W[FCM Workers]
+    Twilio_Q --> Twilio_W[Twilio Workers]
+    Mail_Q --> Mail_W[Mailchimp Workers]
+
+    APNs_W -->|Success| APNs_API[APNs API]
+    APNs_W -->|Fail after retries| APNs_DLQ[APNs DLQ]
+
+    FCM_W --> FCM_API[FCM API]
+    Twilio_W --> Twilio_API[Twilio SMS API]
+    Twilio_W -->|Fail| Twilio_DLQ[Twilio DLQ]
+    Mail_W --> Mail_API[Mailchimp Email API]
+    Mail_W -->|Fail| Mail_DLQ[Mailchimp DLQ]
+
+    APNs_API --> LOG[(Notification Log DB)]
+    FCM_API --> LOG
+    Twilio_API --> LOG
+    Mail_API --> LOG
+
+    LOG --> AN[Analytics Service]
 ```
-                              ┌─────────────────────────────────────────┐
-                              │           Redis Cache (Fast)            │
-                              │ (User Info, Permissions, Templates)     │
-                              └────────────────────┬────────────────────┘
-                                                   │ Check Cache
-                                                   ▼
-┌──────────────┐              ┌─────────────────────────────────────────┐
-│  Services 1  │ ──Trigger──> │            Publisher Server             │
-├──────────────┤              │   - Validates user & check permissions  │
-│  Services N  │ ──Trigger──> │   - Compiles template placeholders      │
-└──────────────┘              └────────────────────┬────────────────────┘
-                                                   │ Push to channel MQs
-                                                   ▼
-                                ┌───────────────────────────────────────┐
-                                │          Message Queues (MQs)         │
-                                │  ┌──────────────┐   ┌──────────────┐  │
-                                │  │  APNs Queue  │   │  FCM Queue   │  │
-                                │  └──────┬───────┘   └──────┬───────┘  │
-                                │  ┌──────┴───────┐   ┌──────┴───────┐  │
-                                │  │ Twilio Queue │   │Mailchimp Q.  │  │
-                                │  └──────┬───────┘   └──────┬───────┘  │
-                                └─────────┼──────────────────┼──────────┘
-                                          │ Consume          │ Consume
-                                          ▼                  ▼
-                                ┌──────────────────┐┌──────────────────┐
-                                │  Twilio Workers  ││Mailchimp Workers │
-                                └─────────┬────────┘└────────┬─────────┘
-                                          │                  │
-                         ┌─────────Retry  │                  │  Retry─────────┐
-                         ▼                ▼                  ▼                ▼
-                    ┌─────────┐     ┌───────────┐      ┌───────────┐     ┌─────────┐
-                    │ Twilio  │     │ 3rd-Party │      │ 3rd-Party │     │Mailchimp│
-                    │   DLQ   │     │ API (SMS) │      │API (Email)│     │   DLQ   │
-                    └─────────┘     └─────┬─────┘      └─────┬─────┘     └─────────┘
-                                          │                  │
-                                          ▼                  ▼
-                                ┌───────────────────────────────────────┐
-                                │      Notification Log DB / Cache      │
-                                └──────────────────┬────────────────────┘
-                                                   │ Writes Logs
-                                                   ▼
-                                ┌───────────────────────────────────────┐
-                                │           Analytics Service           │
-                                └───────────────────────────────────────┘
-```
-
----
 
 ### Step-by-Step Flow:
 1. **Trigger:** A service sends a request to the Publisher Server.
-2. **Caching Check:** The Publisher checks **Redis Cache** first to retrieve user contact details, opt-in preferences, and templates. If not in cache, it retrieves them from the Database and updates Redis.
-3. **Template Compilation:** The Publisher merges the request data with the template (e.g. replacing `{{userName}}` with `"Aditya"`).
-4. **Enqueueing:** Publisher publishes a message containing all details to a specific **Message Queue** depending on the channel type (e.g. Twilio Queue for SMS, Mailchimp Queue for Email).
-5. **Consumption:** Dedicated Workers (e.g. Twilio Workers) pull messages from their respective queues.
+2. **Caching Check:** Publisher checks **Redis Cache** first. If not in cache, retrieves from DB and updates Redis.
+3. **Template Compilation:** Publisher merges request data with template (e.g. replacing `{{userName}}` with `"Aditya"`).
+4. **Enqueueing:** Publisher publishes to specific **Message Queue** depending on channel type.
+5. **Consumption:** Dedicated Workers pull messages from their respective queues.
 6. **Execution:** Workers make asynchronous HTTP calls to the 3rd party API.
-7. **Retries:** If the 3rd party gateway fails, the message is placed back into the queue for a retry. If it repeatedly fails, it goes to the **Dead Letter Queue (DLQ)**.
-8. **Logging & Analytics:** On success or final failure, workers log the status to the **Notification Log DB**, which feeds the **Analytics Service** dashboard.
+7. **Retries:** On failure, message is placed back into queue. After max retries, goes to **Dead Letter Queue (DLQ)**.
+8. **Logging & Analytics:** On success or final failure, workers log status to **Notification Log DB**.
 
 ---
 
 ## 🛡️ 7. Resilience, Fault Tolerance, & Advanced Concepts
 
 ### A. Robust Retry Mechanism
-Workers calling 3rd-party APIs will inevitably hit network timeouts or rate-limiting responses (`HTTP 429`). To handle this:
-* **Exponential Backoff:** If an API call fails, the worker retries after an exponentially increasing delay (e.g., $2\text{s}$, $4\text{s}$, $8\text{s}$, $16\text{s}$).
-* **Jitter:** Add a random delay factor (noise) to prevent all retrying workers from hitting the 3rd-party API simultaneously (thundering herd problem).
-* **Dead Letter Queue (DLQ):** After a maximum number of retries (e.g., 5 times), the message is routed to a DLQ. DevOps teams are alerted to manually investigate (e.g., wrong phone number format or invalid API credentials).
+
+```mermaid
+flowchart TD
+    W[Worker] -->|Call 3rd party API| API[3rd Party API]
+    API -->|200 OK| LOG[Log DELIVERED ✅]
+    API -->|429 Rate Limited| WAIT[Exponential Backoff + Jitter]
+    API -->|Error / Timeout| WAIT
+    WAIT -->|retry attempt N| W
+    WAIT -->|After MAX_RETRIES = 5| DLQ[Dead Letter Queue]
+    DLQ --> LOG2[Log FAILED ❌]
+    DLQ --> ALERT[Alert DevOps Team]
+```
 
 #### Example Worker Retrying Pseudocode (Python):
 ```python
@@ -336,12 +290,11 @@ def send_with_retry(notification_message):
     retries = 0
     while retries < MAX_RETRIES:
         try:
-            # Call third party service (e.g., Twilio API)
             response = call_third_party_gateway(notification_message)
             if response.status_code == 200:
                 update_db_status(notification_message.id, "DELIVERED")
                 return True
-            elif response.status_code == 429: # Rate limited
+            elif response.status_code == 429:
                 print("Rate limited by provider. Retrying...")
             else:
                 print("Provider returned error. Retrying...")
@@ -354,7 +307,6 @@ def send_with_retry(notification_message):
         print(f"Waiting {delay:.2f} seconds before retry...")
         time.sleep(delay)
         
-    # Exceeded max retries -> Move to DLQ
     move_to_dead_letter_queue(notification_message)
     update_db_status(notification_message.id, "FAILED")
 ```
@@ -362,7 +314,9 @@ def send_with_retry(notification_message):
 ---
 
 ### B. Notification Templates
-Storing entire message text for every request wastes bandwidth and database space. Instead, use templates stored in the database/cache:
+
+Storing entire message text for every request wastes bandwidth and database space. Instead, use templates:
+
 * **Template Definition:** `Hello {{userName}}, your OTP is {{otp}}. Do not share it.`
 * **Request Payload:**
 ```json
@@ -375,27 +329,32 @@ Storing entire message text for every request wastes bandwidth and database spac
   }
 }
 ```
-* **Benefit:** Smaller network footprint, and product managers can update copy changes in the database without modifying backend code.
+* **Benefit:** Smaller network footprint, product managers can update copy in DB without backend code changes.
 
 ---
 
 ### C. Rate Limiting & User-Level Spam Prevention
+
 To prevent spamming users (e.g., a buggy system loop sending 50 emails to a customer in 2 minutes):
-* **Rate Limiter on API Gateway:** Limits requests coming from internal services.
-* **Frequency Cap on User Level:** Keep a counter in Redis for each user ID: `notif:limit:usr_101`.
-* If a new notification is requested, check if the user has already received more than the allowed threshold (e.g., max 3 notifications per minute). If exceeded, drop or delay the notification.
+
+```mermaid
+flowchart TD
+    NS[Notification Service] --> RL{Redis Counter\nnotif:limit:usr_101}
+    RL -->|count ≤ threshold| Q[Enqueue to MQ ✅]
+    RL -->|count > threshold\ne.g. > 3 per minute| D[Drop / Delay Notification ❌]
+```
 
 ---
 
 ### D. Security & Authentication
 * **Internal Security:** Use API Key validation or JWTs to authenticate microservices communicating with the notification server.
-* **3rd Party Credentials:** Store provider API keys (Twilio auth token, Sendgrid key) in secure secret managers (e.g., AWS Secrets Manager, HashiCorp Vault) rather than hardcoding.
+* **3rd Party Credentials:** Store provider API keys in secure secret managers (e.g., AWS Secrets Manager, HashiCorp Vault).
 
 ---
 
 ### E. Monitoring & Observability
 Key metrics to track in production:
-* **Queue Size / Depth:** If the FCM queue is growing rapidly, it indicates workers are falling behind or Firebase is experiencing downtime.
-* **Delivery Latency:** The time elapsed from publisher ingest to client receipt.
+* **Queue Size / Depth:** If the FCM queue is growing rapidly, workers are falling behind or Firebase is experiencing downtime.
+* **Delivery Latency:** Time elapsed from publisher ingest to client receipt.
 * **Error Rate:** Percentage of failed API calls grouped by 3rd-party provider.
 * **System Saturation:** CPU and memory utilization of worker instances to trigger auto-scaling.

@@ -26,17 +26,13 @@
 | **A** | Availability | Every request **always gets a response** (may not be latest data) |
 | **P** | Partition Tolerance | System keeps running even if **network between nodes breaks** |
 
-### The Rule
+```mermaid
+graph TD
+    P["P — Partition Tolerance\n(MANDATORY — always choose)"]
+    P --> CP["CP — Consistent + Partition Tolerant\nWrites blocked during partition\nReads always fresh\nExample: Banking, HBase"]
+    P --> AP["AP — Available + Partition Tolerant\nAlways responds\nMay serve stale data\nExample: Cassandra, DynamoDB, Social Media"]
+    CA["CA — Consistent + Available\nOnly works with NO partitions\n❌ Not practical in distributed systems"]
 ```
-Partition Tolerance (P) is MANDATORY — always choose it.
-So real choice is always between:  C  vs  A
-```
-
-| Combination | What it means | Example |
-|---|---|---|
-| **CP** | Consistent + Partition Tolerant | DB1, DB2, DB3 — writes blocked if partition; reads always fresh. Used in banking. |
-| **AP** | Available + Partition Tolerant | Always responds, but may serve stale data. Used in social media. |
-| **CA** | Consistent + Available | Only works with no partitions — not practical for distributed systems |
 
 ### Consistency vs Availability (Plain English)
 - **Consistency** → Response is **up-to-date, mandatory**. May block if nodes disagree.
@@ -82,15 +78,13 @@ So real choice is always between:  C  vs  A
 
 ### QPS Calculations
 
-**Feed View QPS:**
 ```
+Feed View QPS:
 Daily feed requests = 1.2B × 30 = 36B requests/day
 QPS = 36B / 86,400 sec ≈ 420,000 QPS
 Peak QPS = 2 × 420K ≈ 840K/sec
-```
 
-**Upload QPS:**
-```
+Upload QPS:
 Daily upload requests = 1.2B × 1 = 1.2B/day
 QPS = 1.2B / 86,400 ≈ 14,000 QPS
 Peak QPS = 2 × 14K ≈ 28K/sec
@@ -98,25 +92,11 @@ Peak QPS = 2 × 14K ≈ 28K/sec
 
 ### Storage Calculations
 
-**Assumptions:**
-- 80% users upload **photos** → avg 1 MB each
-- 20% users upload **videos** → avg 50 MB each
-
-**Photos/day:**
 ```
-1.2B × 80% = ~1B photos × 1 MB = 1PB/day
-```
-
-**Videos/day:**
-```
-1.2B × 20% = 0.25B × 50MB ≈ 12PB/day
-```
-
-**Total daily storage:** `1PB + 12PB = 13PB/day`
-
-**For 5 years:**
-```
-13PB × 365 × 5 ≈ 24,000 PB ≈ 24 Exabytes
+Photos/day: 1.2B × 80% = ~1B photos × 1 MB = 1PB/day
+Videos/day: 1.2B × 20% = 0.25B × 50MB ≈ 12PB/day
+Total daily: 1PB + 12PB = 13PB/day
+For 5 years: 13PB × 365 × 5 ≈ 24,000 PB ≈ 24 Exabytes
 ```
 
 ---
@@ -125,12 +105,13 @@ Peak QPS = 2 × 14K ≈ 28K/sec
 
 ### Monolith (e.g. Tomato app — early days)
 
-```
-[ Single Codebase ]
-  ├── Orders
-  ├── Payments
-  ├── Restaurants
-  └── Users
+```mermaid
+graph TD
+    M["Single Codebase (Monolith)"]
+    M --> O[Orders]
+    M --> P[Payments]
+    M --> R[Restaurants]
+    M --> U[Users]
 ```
 
 | Pros | Cons |
@@ -143,10 +124,11 @@ Peak QPS = 2 × 14K ≈ 28K/sec
 
 ### Microservice (e.g. Zomato)
 
-```
-USERS --http--> Restaurants --http--> Orders
-                                         |
-                                      Payments
+```mermaid
+graph LR
+    Users -->|HTTP| Restaurants
+    Restaurants -->|HTTP| Orders
+    Orders -->|HTTP| Payments
 ```
 
 Each service:
@@ -188,13 +170,12 @@ Split by **what the code does** — Orders, Payments, Users, Restaurants each be
 
 ### Pattern 2: Decomposition by Sub-domain ✅ (Recommended)
 
-Split by **URL path / domain boundary:**
-
-```
-www.zomato.com/orders      → Orders Microservice
-www.zomato.com/payments    → Payments Microservice
-www.zomato.com/add-user    → Users Microservice
-www.zomato.com/restaurants → Restaurants Microservice
+```mermaid
+graph TD
+    GW[API Gateway] --> OS["Orders Microservice\nwww.zomato.com/orders"]
+    GW --> PS["Payments Microservice\nwww.zomato.com/payments"]
+    GW --> US["Users Microservice\nwww.zomato.com/add-user"]
+    GW --> RS["Restaurants Microservice\nwww.zomato.com/restaurants"]
 ```
 
 **Advantage:** Each team owns exactly **one domain**. Orders team only knows Orders.
@@ -207,27 +188,21 @@ www.zomato.com/restaurants → Restaurants Microservice
 
 Named after the **strangler fig tree** 🌳 — a vine that slowly wraps around and replaces the host tree.
 
-### How it works:
+```mermaid
+gantt
+    title Strangler Pattern Migration (Tomato App — 100 APIs)
+    dateFormat X
+    axisFormat Week %s
 
-```
-Step 1: Pick ONE route (e.g. /orders)
-Step 2: Build a new microservice for it
-Step 3: Redirect traffic to new service
-Step 4: Test → then repeat for next route
-```
+    section Monolith
+    90 APIs on Monolith    :0, 3
+    60 APIs on Monolith    :2, 5
+    0 APIs on Monolith     :5, 6
 
-### Real Example — Tomato App
-
-```
-Total: 100 APIs
-
-Week 1:  Migrate /orders  → 10 APIs moved
-         Client: 90 req → Monolith, 10 req → New service (10% done)
-
-Week 3:  Migrate /payments
-         Now: 40% on Microservices, 60% still on Monolith
-
-Week 6:  100% migrated ✅
+    section Microservices
+    /orders - 10 APIs moved  :0, 2
+    /payments migrated       :2, 4
+    100% migrated ✅         :4, 6
 ```
 
 **Both systems run in parallel during migration.** Zero downtime approach.
@@ -240,29 +215,29 @@ Week 6:  100% migrated ✅
 
 ### Option A — Shared DB ❌
 
-All services read/write to **one central database.**
-
-```
-Orders svc ──┐
-Payments svc─┼──► [Single DB]
-Users svc ───┘
+```mermaid
+graph LR
+    OS[Orders Service] --> DB[(Single DB)]
+    PS[Payments Service] --> DB
+    US[Users Service] --> DB
 ```
 
 | Pros | Cons |
 |---|---|
 | Easy JOINs (SQL) | **Cannot scale** independently |
-| Simple transactions (ACID) | One DB type for everyone (SQL or NoSQL — pick one) |
+| Simple transactions (ACID) | One DB type for everyone |
 | Familiar | Schema change breaks all services |
 
 ---
 
-### Option B — Unique DB per service ✅ (Recommended)
+### Option B — Unique DB per service ✅ (Recommended — Polyglot Persistence)
 
-```
-Orders svc   ──► Orders DB (PostgreSQL)
-Payments svc ──► Payments DB (MySQL — ACID critical)
-Users svc    ──► Users DB (MongoDB — flexible schema)
-Restaurant   ──► Menu DB (Redis — fast reads/cache)
+```mermaid
+graph LR
+    OS[Orders Service] --> ODB[(PostgreSQL)]
+    PS[Payments Service] --> PDB[(MySQL - ACID)]
+    US[Users Service] --> UDB[(MongoDB)]
+    RS[Restaurant Service] --> RDB[(Redis - Cache)]
 ```
 
 **This is called "Polyglot Persistence"** — use the **right DB for the right job.**
@@ -280,7 +255,7 @@ Restaurant   ──► Menu DB (Redis — fast reads/cache)
 
 ## 8. Communication: Choreography vs Orchestration
 
-> When services need to coordinate (e.g. place order → charge payment → confirm restaurant), how do they talk?
+> When services need to coordinate, how do they talk?
 
 ---
 
@@ -288,25 +263,15 @@ Restaurant   ──► Menu DB (Redis — fast reads/cache)
 
 **No central controller.** Each service publishes events and listens to others.
 
-```
-Order placed
-    │
-    ▼  [event: order_created]
-Payment service
-    │
-    ▼  [event: payment_success]
-Restaurant service
-    │
-    ▼  [event: confirmed]
-Order complete ✅
-```
+```mermaid
+flowchart TD
+    A([Order Placed]) -->|event: order_created| B[Payment Service]
+    B -->|event: payment_success| C[Restaurant Service]
+    C -->|event: confirmed| D([Order Complete ✅])
 
-**If Restaurant fails:**
-```
-Restaurant FAILS
-    │
-    └──► [rollback event] ──► Payment refunded
-                           └──► Order cancelled
+    C -->|event: restaurant_failed| E[Rollback]
+    E -->|rollback event| F[Payment Refunded]
+    E --> G[Order Cancelled]
 ```
 
 | Pros | Cons |
@@ -321,23 +286,16 @@ Restaurant FAILS
 
 **One central Orchestrator** controls the flow via API calls.
 
-```
-           ┌──────────────────┐
-           │   Orchestrator   │
-           └────────┬─────────┘
-                    │
-        ┌───────────┼───────────┐
-        ▼           ▼           ▼
-   1. Order     2. Payment  3. Restaurant
-      svc          svc          svc
-      [DB]         [DB]         [DB]
-```
+```mermaid
+flowchart TD
+    O[Orchestrator]
+    O -->|1. Place| OS[Order Service\nDB]
+    O -->|2. Charge| PS[Payment Service\nDB]
+    O -->|3. Confirm| RS[Restaurant Service\nDB]
 
-**If Restaurant fails:**
-```
-Restaurant FAILS → error to Orchestrator
-Orchestrator → rollback Payment
-Orchestrator → cancel Order
+    RS -->|FAIL| O
+    O -->|rollback| PS
+    O -->|cancel| OS
 ```
 
 | Pros | Cons |
@@ -362,22 +320,23 @@ Orchestrator → cancel Order
 
 ### Master-Slave Architecture
 
-```
-Orders svc ──► Orders DB (Master) ──┐
-Payments svc ─► Payments DB (Master)─┼──sync──► VIEW DB (Slave)
-Restaurant svc ─► Restaurant DB ────┘              │
-                                                    ▼
-                                          SELECT * FROM orders
-                                          JOIN payments ON ...
-                                          JOIN restaurants ON ...
-                                          ✅ JOIN works here!
+```mermaid
+flowchart LR
+    OS[Orders Service] --> ODB[(Orders DB\nMaster)]
+    PS[Payments Service] --> PDB[(Payments DB\nMaster)]
+    RS[Restaurant Service] --> RDB[(Restaurant DB\nMaster)]
+
+    ODB -->|sync| VDB[(VIEW DB\nSlave / Replica)]
+    PDB -->|sync| VDB
+    RDB -->|sync| VDB
+
+    VDB --> Q["SELECT * FROM orders\nJOIN payments ON ...\nJOIN restaurants ON ...\n✅ JOINs work here!"]
 ```
 
 ### How it works:
 - **Masters** handle all write operations (one per service)
 - **Slave/View DB** is a **read-only replica** — synced from all masters
 - All complex **READ queries and JOINs** go to the View DB
-- This is the **Master-Slave Model** in action
 
 | | Without CQRS | With CQRS |
 |---|---|---|

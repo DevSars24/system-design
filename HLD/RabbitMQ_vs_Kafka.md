@@ -17,8 +17,17 @@
 
 ### RabbitMQ
 
-```
-Producer → Exchange → (Binding + Routing Key) → Queue(s) → Consumer(s)
+```mermaid
+graph LR
+    P[Producer] --> E[Exchange]
+    E -->|Routing Key + Binding| Q1[Queue 1]
+    E -->|Routing Key + Binding| Q2[Queue 2]
+    Q1 --> C1[Consumer 1]
+    Q2 --> C2[Consumer 2]
+
+    style E fill:#f0a500,color:#000
+    style Q1 fill:#4a90d9,color:#fff
+    style Q2 fill:#4a90d9,color:#fff
 ```
 
 - Core components: **Producer, Exchange, Queue, Binding**
@@ -27,25 +36,38 @@ Producer → Exchange → (Binding + Routing Key) → Queue(s) → Consumer(s)
 - **Smart broker, dumb consumer** — broker handles routing, tracking, delivery
 - Consumer receives messages **pushed** from the broker
 - Message is **deleted after ACK** (no replay by default)
-- Supports: priority queues, TTL, dead-letter queues, delayed scheduling
 
 ### Apache Kafka
 
-```
-Producer → Topic (Partition 0..N on multiple Brokers) ← Consumer Group(s)
+```mermaid
+graph LR
+    P[Producer] --> T["Topic\n(Partition 0..N across Brokers)"]
+    T --> CG1["Consumer Group A\n(Consumer 1 - Partition 0)"]
+    T --> CG2["Consumer Group A\n(Consumer 2 - Partition 1)"]
+    T --> CG3["Consumer Group B\n(Independent consumers)"]
+
+    style T fill:#e74c3c,color:#fff
 ```
 
 - Core components: **Producer, Topic, Partition, Broker, Consumer Group**
 - Each partition = **append-only log** on disk
-- Messages keyed to a partition (consistent hashing)
 - **Dumb broker, smart consumer** — consumers track their own **offset**
 - Consumers **pull** data at their own pace
 - Messages are **retained for a configurable period** (default 7 days) — replay is possible
-- Replicated across brokers for fault tolerance; one **leader** per partition
 
 ---
 
 ## 3. Push vs Pull Delivery
+
+```mermaid
+graph LR
+    subgraph RabbitMQ_Push ["RabbitMQ — Push Model"]
+        B[Broker] -->|Pushes message| C1[Consumer]
+    end
+    subgraph Kafka_Pull ["Kafka — Pull Model"]
+        C2[Consumer] -->|Polls for messages| K[Kafka Broker]
+    end
+```
 
 | Aspect | RabbitMQ (Push) | Kafka (Pull) |
 |--------|----------------|-------------|
@@ -62,18 +84,27 @@ Producer → Topic (Partition 0..N on multiple Brokers) ← Consumer Group(s)
 ## 4. Message Routing & Patterns
 
 ### RabbitMQ — Rich Routing
-- `fanout` exchange → broadcast to all bound queues (classic pub/sub)
-- `topic` exchange → wildcard pattern routing (`logs.#`, `*.error`)
-- `direct` exchange → exact routing key match
-- `headers` exchange → route by message headers
-- Natively supports **AMQP, MQTT, STOMP** via plugins
-- ✅ **Content-based / selective routing built into the broker**
+
+```mermaid
+graph TD
+    P[Producer] --> FE["Fanout Exchange\n(broadcast to all queues)"]
+    P --> TE["Topic Exchange\n(wildcard: logs.#, *.error)"]
+    P --> DE["Direct Exchange\n(exact routing key match)"]
+
+    FE --> Q1[Queue 1] & Q2[Queue 2] & Q3[Queue 3]
+    TE --> Q4[error.queue] & Q5[warn.queue]
+    DE --> Q6[exact.queue]
+```
 
 ### Kafka — Simple Topic Model
-- Producer labels messages with a **topic** (+ optional key for partition)
-- No built-in filtering; **all consumers see all messages** in a topic
-- Filtering must happen **consumer-side** or via separate topics / ksqlDB / Kafka Streams
-- ✅ **Multiple consumer groups** each independently read the full topic (native fan-out)
+
+```mermaid
+graph LR
+    P[Producer] -->|label with topic| T[Topic]
+    T --> CGA["Consumer Group A\n(reads everything)"]
+    T --> CGB["Consumer Group B\n(reads everything independently)"]
+    CGA --> F[Filter consumer-side]
+```
 
 ### Key Difference
 | Scenario | Winner |
@@ -95,26 +126,46 @@ Producer → Topic (Partition 0..N on multiple Brokers) ← Consumer Group(s)
 | **At-least-once** | ✅ Default (ACK/NACK + requeue) | ✅ Default (re-read from last committed offset on restart) |
 | **Exactly-once** | ❌ No built-in; requires consumer-side de-duplication | ✅ Via idempotent producers + transactional API (Kafka Streams) |
 
-### RabbitMQ Delivery Details
-- Message stays in queue until **ACK received**
-- **NACK / consumer crash** → message requeued or sent to dead-letter queue
-- Durability via **persistent messages + durable queues** (disk, survives restart)
-- Messages **removed after consumption** — no replay for new consumers
+### RabbitMQ Delivery Flow
 
-### Kafka Delivery Details
-- Consumer tracks position via **offset** (committed to `__consumer_offsets` topic)
-- Crash + restart → resumes from last committed offset → **at-least-once**
-- **Idempotent producers** + **transaction markers** → exactly-once (advanced config)
-- Messages retained for configurable period → **replay and audit are possible**
+```mermaid
+flowchart LR
+    B[Broker] -->|Push| C[Consumer]
+    C -->|ACK| B
+    C -->|NACK / Crash| DLQ[Dead Letter Queue]
+    B -->|Requeue on NACK| B
+```
+
+### Kafka Delivery Flow
+
+```mermaid
+flowchart LR
+    K[Kafka Broker] -->|Consumer pulls| C[Consumer]
+    C -->|Commit offset| OF[__consumer_offsets topic]
+    C -->|Crash & restart| OF
+    OF -->|Resume from last offset| K
+```
 
 ---
 
 ## 6. Ordering Guarantees
 
 | System | Ordering Guarantee |
-|--------|--------------------|
+|--------|-------------------|
 | **RabbitMQ** | FIFO **per queue**; ordering breaks with multiple consumers on one queue |
 | **Kafka** | Strict order **within a partition**; no cross-partition order |
+
+```mermaid
+graph LR
+    subgraph RabbitMQ ["RabbitMQ Ordering"]
+        Q[Queue] -->|FIFO| CA[Consumer A]
+        Q -->|Breaks order| CB[Consumer B]
+    end
+    subgraph Kafka_Order ["Kafka Ordering"]
+        P0["Partition 0\nsame key → ordered"] --> C1[Consumer 1]
+        P1["Partition 1"] --> C2[Consumer 2]
+    end
+```
 
 - **RabbitMQ tip:** For strict ordering, use a single consumer per queue.
 - **Kafka tip:** Send related messages with the **same key** → same partition → ordered.
@@ -134,34 +185,24 @@ Producer → Topic (Partition 0..N on multiple Brokers) ← Consumer Group(s)
 > - Use RabbitMQ for **low-latency, task-driven** workloads
 > - Use Kafka for **high-throughput, streaming** workloads
 
-### Other Systems (Quick Reference)
-
-| System | Approx. Latency | Approx. Throughput | Notes |
-|--------|-----------------|--------------------|-------|
-| Amazon SQS | 10–100 ms | Unlimited (Standard) / ~300/sec (FIFO) | Managed, pull-based |
-| Redis Streams | Sub-millisecond | Hundreds of K/sec | In-memory, limited by RAM |
-| ActiveMQ | Similar to RabbitMQ | Thousands/sec | Enterprise JMS; Artemis is faster |
-
 ---
 
 ## 8. Scalability & Fault Tolerance
 
-### RabbitMQ
-
-- **Cluster:** Queues live on one node; mirrored to others for HA
-- **Scaling a single queue:** Not automatic — must shard at app level or use Sharded Queue plugin
-- **Scaling overall:** Distribute different queues across different nodes
-- **Fault tolerance:** Mirrored queues elect a new master on node failure
-- **Federation / Shovels:** Cross-cluster message forwarding
-- **Scaling style:** Primarily **vertical** for a single queue; horizontal via workload splitting
-
-### Kafka
-
-- **Cluster:** Partitions distributed across all brokers automatically
-- **Scale throughput:** Add brokers + increase partitions → near-linear scaling
-- **Fault tolerance:** Per-partition replicas; automatic leader election (KRaft in newer versions, ZooKeeper in older)
-- **Consumer scaling:** Up to 1 consumer per partition in a group; add partitions to scale beyond
-- **Scaling style:** **Horizontal** by design — add brokers, spread partitions
+```mermaid
+graph TD
+    subgraph RabbitMQ_Scale ["RabbitMQ Scaling"]
+        Q1[Queue - Node 1] -->|Mirror| Q2[Queue Mirror - Node 2]
+        Q1 -->|Mirror| Q3[Queue Mirror - Node 3]
+        Q2 -->|Leader election on failure| QL[New Master]
+    end
+    subgraph Kafka_Scale ["Kafka Scaling"]
+        B1[Broker 1] --- B2[Broker 2]
+        B2 --- B3[Broker 3]
+        B1 -->|Partition replicas| B2 & B3
+        Note["Add broker → spread partitions\n→ near-linear throughput scale"]
+    end
+```
 
 | Aspect | RabbitMQ | Kafka |
 |--------|----------|-------|
@@ -174,57 +215,44 @@ Producer → Topic (Partition 0..N on multiple Brokers) ← Consumer Group(s)
 
 ## 9. When to Choose What
 
-### Choose **RabbitMQ** when:
-- ✅ You need **complex routing** (topic/fanout/direct/headers)
-- ✅ Messages are **commands or jobs** — each done by exactly one consumer
-- ✅ You want **immediate delivery** with low latency
-- ✅ **No replay needed** — fire-and-forget after processing
-- ✅ You have **heterogeneous clients** (AMQP, MQTT, STOMP)
-- ✅ Use case examples: background job processing, email/notification dispatch, order payment handling, microservice command channels, IoT data ingestion via MQTT
-
-### Choose **Kafka** when:
-- ✅ You have **high-volume event streams** (millions/sec)
-- ✅ **Multiple independent consumers** need the same data
-- ✅ You need **message replay / audit / history** (event sourcing, reprocessing)
-- ✅ Messages are **events** (facts about something that happened)
-- ✅ You're building a **data pipeline** (Hadoop, Spark, Elasticsearch, etc.)
-- ✅ Use case examples: user activity tracking, log aggregation, real-time analytics, event sourcing, change data capture (CDC), central event bus
-
-### Choose **Amazon SQS** when:
-- ✅ You're on AWS and want **zero-ops managed queueing**
-- ✅ Workload is modest (< few K/sec) and simplicity is valued
-- ✅ Pair with **SNS for fan-out** (SNS → multiple SQS queues)
-
-### Choose **Redis Streams** when:
-- ✅ You already use Redis and need **ultra-low latency** messaging
-- ✅ Data volume fits **in memory**
-- ✅ Lightweight IoT or real-time gaming / chat scenarios
-
-### Choose **ActiveMQ / Artemis** when:
-- ✅ You're in an **enterprise Java / JMS** ecosystem
-- ✅ You need JMS API, JMS transactions, or bridges to IBM MQ
-- ✅ Legacy integration requirements
+```mermaid
+flowchart TD
+    A([What is your use case?]) --> B{Complex routing\nor simple topic?}
+    B -->|Complex routing\nfanout/topic/direct| C[✅ RabbitMQ]
+    B -->|Simple topic\nhigh throughput| D{Need replay\nor audit?}
+    D -->|Yes - event sourcing\nCDC, pipelines| E[✅ Kafka]
+    D -->|No - fire and forget\none-time tasks| F[✅ RabbitMQ]
+    A --> G{Cloud managed\nAWS?}
+    G -->|Yes, simple queues| H[✅ Amazon SQS]
+    A --> I{Already using Redis\nultra-low latency?}
+    I -->|Yes| J[✅ Redis Streams]
+    A --> K{Enterprise Java\nJMS ecosystem?}
+    K -->|Yes| L[✅ ActiveMQ/Artemis]
+```
 
 ---
 
 ## 10. RabbitMQ + Kafka Together (Hybrid Architecture)
 
-Many production systems use **both**:
+```mermaid
+graph TB
+    subgraph Events ["Event Bus — Kafka"]
+        K[Kafka Topic]
+        UA[User Actions] --> K
+        IU[Inventory Updates] --> K
+        K --> AN[Analytics Service]
+        K --> AU[Audit Service]
+        K --> CDC[CDC Pipeline]
+    end
 
-```
-[User Actions / Inventory Updates]
-         │
-         ▼
-      ┌─────┐
-      │Kafka│  ← Event bus: analytics, audit, CDC, fan-out to N services
-      └─────┘
-
-[Order Payment / Email / Image Resize Tasks]
-         │
-         ▼
-   ┌──────────┐
-   │ RabbitMQ │  ← Task queue: one-time execution, retries, routing
-   └──────────┘
+    subgraph Tasks ["Task Queue — RabbitMQ"]
+        RMQ[RabbitMQ]
+        OP[Order Payment] --> RMQ
+        EM[Email Dispatch] --> RMQ
+        IR[Image Resize] --> RMQ
+        RMQ --> W1[Worker 1]
+        RMQ --> W2[Worker 2]
+    end
 ```
 
 **Pattern:** Use Kafka as the **central event log** for state changes; use RabbitMQ for **command/task dispatch** requiring reliability and routing.
